@@ -8,7 +8,7 @@
 
 | Phase | Name | Status | Target Week |
 |---|---|---|---|
-| 1 | Core Infrastructure | Not Started | Week 1 |
+| 1 | Core Infrastructure | **Complete** | Week 1 |
 | 2 | First Agent (Research) | Not Started | Week 1 |
 | 3 | Full Workflow | Not Started | Week 2 |
 | 4 | Asset Generation | Not Started | Week 2 |
@@ -17,25 +17,41 @@
 
 ---
 
-## Phase 1 — Core Infrastructure
+## Phase 1 — Core Infrastructure ✅
 
 **Goal:** Working FastAPI app connected to Postgres, Redis, Temporal, and Kafka.
 
 ### Tasks
-- [ ] Project scaffolding (directory structure, pyproject.toml, Dockerfile)
-- [ ] FastAPI app skeleton (main.py, routers, middleware)
-- [ ] Docker Compose: postgres, redis, temporal, kafka, zookeeper, minio
-- [ ] Database migrations (Alembic): `projects`, `workflow_executions`, `ai_usage`, `assets`, `research_chunks`
-- [ ] pgvector extension enabled
-- [ ] Temporal SDK integration (worker + client)
-- [ ] Kafka producer/consumer base classes
-- [ ] Health check endpoints (`GET /health`, `GET /ready`)
-- [ ] Basic project CRUD endpoints (no workflow yet)
-- [ ] Request validation with Pydantic models
-- [ ] Structured JSON logging setup
+- [x] Project scaffolding (pyproject.toml, Dockerfile, flat `film/` layout)
+- [x] FastAPI app skeleton (main.py, lifespan, CORS, global error handler)
+- [x] Docker Compose: pgvector/pgvector:pg16, postgres:16 (temporal), redis:7, temporalio/auto-setup, temporalio/ui, bitnami/kafka (KRaft), minio + minio-init
+- [x] Database migrations (Alembic async): `projects`, `workflow_executions`, `ai_usage`, `assets`, `research_chunks`
+- [x] pgvector extension + ivfflat index on `research_chunks.embedding`
+- [x] Temporal client + worker stub (`film/temporal/`)
+- [x] Kafka `FilmProducer` + `FilmConsumer` base class (`film/kafka/`)
+- [x] Topic constants for all 16 topics (`film/kafka/topics.py`)
+- [x] Health check endpoints: `GET /health` (liveness) + `GET /ready` (DB + Redis)
+- [x] Project CRUD: `POST/GET/LIST/DELETE /api/v1/projects`
+- [x] Pydantic v2 schemas with `from_attributes=True`
+- [x] Structured logging via structlog (dev: pretty-print, prod: JSON)
+- [x] Unit tests for health + project auth/validation
+- [x] Integration test scaffold (marked, requires docker stack)
 
-### Done
-*(nothing yet)*
+### Key files
+```
+film/
+  core/config.py      — pydantic-settings, lru_cache
+  core/logging.py     — structlog setup
+  state.py            — module-level Redis + Kafka singletons (set in lifespan)
+  db/models.py        — 5 ORM models incl. Vector(1536) on ResearchChunk
+  api/v1/projects.py  — CRUD handlers
+  kafka/producer.py   — FilmProducer (async aiokafka wrapper)
+  kafka/consumer.py   — FilmConsumer ABC
+  temporal/worker.py  — stub worker (Phase 2 will register activities)
+  main.py             — app factory + lifespan
+alembic/versions/0001_initial_schema.py — full schema + pgvector
+docker-compose.yml    — 8 services
+```
 
 ---
 
