@@ -8,7 +8,7 @@ import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
 
 
 # ── Unit tests (no real DB) ──────────────────────────────────────────────────
@@ -41,7 +41,10 @@ async def test_create_project_invalid_duration(
     assert response.status_code == 422
 
 
-async def test_get_project_not_found(client: AsyncClient, auth_headers: dict) -> None:
+async def test_get_project_not_found(auth_headers: dict) -> None:
+    from film.api.deps import get_db
+    from film.main import app
+
     project_id = str(uuid.uuid4())
 
     mock_result = MagicMock()
@@ -49,18 +52,19 @@ async def test_get_project_not_found(client: AsyncClient, auth_headers: dict) ->
     mock_session = AsyncMock()
     mock_session.execute = AsyncMock(return_value=mock_result)
 
-    with patch("film.api.v1.projects.DbSession", mock_session):
-        with patch("film.db.session.get_db_session") as mock_gen:
-            async def _gen():
-                yield mock_session
-            mock_gen.return_value = _gen()
+    async def override_db():
+        yield mock_session
 
-            response = await client.get(
-                f"/api/v1/projects/{project_id}", headers=auth_headers
-            )
+    app.dependency_overrides[get_db] = override_db
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as c:
+            response = await c.get(f"/api/v1/projects/{project_id}", headers=auth_headers)
+    finally:
+        app.dependency_overrides.pop(get_db, None)
 
-    # 404 or 422 both acceptable depending on routing — project should not be found
-    assert response.status_code in (404, 422)
+    assert response.status_code == 404
 
 
 # ── Integration tests (require: make up && make migrate) ─────────────────────

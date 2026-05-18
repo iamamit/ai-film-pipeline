@@ -77,7 +77,7 @@ class Asset(Base):
     type: Mapped[str | None] = mapped_column(String(50))
     scene_number: Mapped[int | None] = mapped_column(Integer)
     storage_url: Mapped[str | None] = mapped_column(Text)
-    metadata: Mapped[dict | None] = mapped_column(JSON)
+    meta: Mapped[dict | None] = mapped_column("metadata", JSON)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=datetime.utcnow
     )
@@ -92,7 +92,7 @@ class ResearchChunk(Base):
     )
     content: Mapped[str | None] = mapped_column(Text)
     embedding: Mapped[list[float] | None] = mapped_column(Vector(1536), nullable=True)
-    metadata: Mapped[dict | None] = mapped_column(JSON)
+    meta: Mapped[dict | None] = mapped_column("metadata", JSON)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=datetime.utcnow
     )
