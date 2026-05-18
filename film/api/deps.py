@@ -2,14 +2,18 @@ import uuid
 from collections.abc import AsyncGenerator
 from typing import Annotated
 
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, Header, HTTPException, Security
+from fastapi.security import APIKeyHeader
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from film.db.session import get_db_session
 
+# Exposes the Authorize button in Swagger UI for X-User-ID
+_user_id_scheme = APIKeyHeader(name="X-User-ID", scheme_name="X-User-ID", auto_error=False)
+
 
 async def get_current_user(
-    x_user_id: Annotated[str | None, Header(alias="X-User-ID")] = None,
+    x_user_id: Annotated[str | None, Security(_user_id_scheme)] = None,
 ) -> uuid.UUID:
     if not x_user_id:
         raise HTTPException(status_code=401, detail="Missing X-User-ID header")

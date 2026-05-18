@@ -68,8 +68,17 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="AI Film Production Pipeline",
         version="0.1.0",
-        description="Distributed AI orchestration for documentary-style video generation",
+        description=(
+            "Distributed AI orchestration for documentary-style video generation.\n\n"
+            "**Auth:** Add header `X-User-ID: 550e8400-e29b-41d4-a716-446655440000` "
+            "to all project endpoints (click **Authorize** above)."
+        ),
         lifespan=lifespan,
+        openapi_tags=[
+            {"name": "health", "description": "Liveness and readiness probes"},
+            {"name": "projects", "description": "Create and manage film projects"},
+        ],
+        swagger_ui_parameters={"persistAuthorization": True},
     )
 
     app.add_middleware(
