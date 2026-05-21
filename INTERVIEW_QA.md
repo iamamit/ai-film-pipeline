@@ -399,4 +399,136 @@ The `async with AsyncSessionFactory() as session:` block opens a new session at 
 
 ---
 
-*End of interview preparation document. This document covers all major components of the AI Film Production Pipeline stack with sufficient depth for a senior engineer interview.*
+## 13. Script Generation Activity
+
+### Q: Walk me through how the `generate_script` activity works end to end.
+
+**Answer:** The activity lives in `film/activities/script.py` and is decorated with `@activity.defn`. It receives a `ProjectContext` object containing the project ID, title, logline, and target duration in minutes. The flow has five steps. Step one: fetch all `ResearchChunk` rows for the project from PostgreSQL using a plain SQLAlchemy `select(ResearchChunk).where(ResearchChunk.project_id == ctx.project_id)` query — no vector similarity search yet, just a bulk fetch. Step two: concatenate the `text` fields from all chunks and trim the combined string to 6000 characters to stay within Groq's context window. Step three: call `_estimate_scenes(ctx.duration_minutes)` to decide how many scenes to request, then build a structured prompt that includes the TITLE, LOGLINE, ACT structure, and a per-scene format specifying SCENE N, LOCATION, DURATION, NARRATION, VISUALS, and TRANSITION. This prompt is sent to Groq using the `llama-3.3-70b-versatile` model with `temperature=0.8` and `max_tokens=4096`. Step four: the raw script text returned by Groq is stored in a new `Asset` row with `type="script"` and `meta={"content": script_text, "scenes": scenes_written}`. An `AIUsage` row is also logged with `provider="groq"` and `operation="script_generation"`. Step five: the project's status is updated to `scripting` at the start (progress 25%) and the progress is bumped to 40% on completion. The activity returns a `ScriptOutput` dataclass with `scenes`, `total_tokens`, and `asset_id`.
+
+**Follow-up: Why trim the research text to 6000 characters?**
+
+Groq's `llama-3.3-70b-versatile` model has a context window limit, and the script generation prompt itself already consumes a substantial portion of that window — the ACT structure, per-scene format instructions, TITLE, and LOGLINE are all included before we even append the research. Trimming the research to 6000 characters leaves room for the prompt overhead and the model's 4096-token output without hitting a context-length error. A more sophisticated approach — which Phase 4 introduces — is to use RAG to select only the most relevant research chunks rather than blindly truncating. But for Phase 3, the trim is a pragmatic guard against failures.
+
+**Follow-up: Why store the script inside `Asset.meta["content"]` instead of a dedicated Script table?**
+
+The `Asset` table is designed as a general-purpose content store — it already has a `type` discriminator field and a `meta` JSONB column, so storing the script there required zero schema changes and no new Alembic migration. A dedicated `Script` table would give you better queryability (indexed columns for scene count, word count, etc.) and cleaner foreign key relationships, but in Phase 3 the only operation on the script is "store it, then retrieve it whole." The JSONB meta column handles that perfectly. When the system matures and needs to query across script metadata — filtering by scene count, joining to storyboard frames — migrating to a dedicated table is straightforward because the `Asset` row with `type="script"` already acts as the foreign key anchor.
+
+**Follow-up: What does `temperature=0.8` mean and why is it higher than the research activity call?**
+
+Temperature controls the randomness of the model's token sampling. At `temperature=0.0` the model always picks the highest-probability next token — fully deterministic, factually conservative. At `temperature=1.0` sampling is maximally random. The research activity uses a lower temperature because it's summarizing factual material and accuracy matters more than creativity. The script generation activity uses `temperature=0.8` because documentary scriptwriting benefits from creative variation — a slightly warmer temperature produces more varied sentence structures, more evocative narration, and scene descriptions that don't sound formulaic. If you ran script generation at `temperature=0.0`, every documentary on the same topic would read identically, which is undesirable.
+
+---
+
+### Q: How did you structure the script generation prompt and why?
+
+**Answer:** The prompt is a structured natural-language specification that gives the model enough constraints to produce parseable output without needing a formal schema. The outer frame sets the role: "You are a documentary scriptwriter." Then it injects the project metadata — TITLE and LOGLINE — so the model understands the creative brief. The ACT structure section tells the model to write a three-act documentary (setup, development, resolution), then specifies the exact number of scenes to produce based on `_estimate_scenes()`. For each scene the prompt requires six labelled fields: `SCENE N` (integer), `LOCATION` (setting description), `DURATION` (seconds), `NARRATION` (voiceover text), `VISUALS` (shot descriptions), and `TRANSITION` (cut/dissolve/fade). The research text is appended at the end under a `RESEARCH CONTEXT:` header. This format mirrors how professional documentary scripts are laid out, which leverages the model's pre-training on real scripts.
+
+**Follow-up: What happens if Groq doesn't follow the format exactly?**
+
+In Phase 3, the script text is stored verbatim — there is no strict parser that enforces the six-field schema. The `scenes_written` count in `Asset.meta` is derived by counting occurrences of the `SCENE` label in the output text (e.g., `output.count("SCENE ")`). If Groq deviates — skipping a VISUALS block, merging two scenes, or adding extra prose — the text is still stored as-is and the scene count may be slightly off. The frontend displays the script as a raw pre-formatted block, so the user sees whatever Groq produced. For Phase 4, when the storyboard activity needs to extract individual scenes to generate images, a more robust parser (regex or a second LLM call for structured extraction) will be necessary. This is a known limitation called out in the codebase's TODO comments.
+
+**Follow-up: How do you count scenes in the output?**
+
+The `scenes_written` field stored in `Asset.meta` is computed by counting the number of `"SCENE "` prefix occurrences in the returned script string. This is intentionally simple — a regex like `len(re.findall(r"^SCENE \d+", text, re.MULTILINE))` would be more precise, but a plain string count works reliably enough given that "SCENE " as a standalone label is unlikely to appear in narration or visuals text. The count is informational at this stage — it drives the scene count badge displayed in the frontend's script panel.
+
+---
+
+### Q: How does `_estimate_scenes` work and why?
+
+**Answer:** `_estimate_scenes(duration_minutes: int) -> int` is a one-liner helper: `return max(4, duration_minutes // 2)`. Integer floor division by 2 maps the documentary duration directly to a scene count — a 10-minute documentary gets 5 scenes, a 20-minute documentary gets 10, a 30-minute documentary gets 15. The `max(4, ...)` guard ensures that even a very short documentary (under 8 minutes) always has at least 4 scenes, since a three-act documentary with fewer than 4 scenes would feel structurally inadequate (you can't have a meaningful setup, two development beats, and a resolution in 3 scenes or fewer).
+
+**Follow-up: What's the trade-off of more versus fewer scenes?**
+
+More scenes gives the model more structure to work with: each scene is shorter in word count, which makes the NARRATION and VISUALS blocks more focused and easier to translate into storyboard images in Phase 4. However, more scenes means more Groq API output tokens, which increases cost and latency. It also means more rows to store in the storyboard and more image generation calls. Fewer scenes produces longer, more free-form narration blocks that are richer in prose but harder to map to discrete visual shots. The `duration // 2` heuristic approximates a 2-minutes-per-scene rhythm, which aligns with documentary pacing conventions where a scene typically lasts 1.5–3 minutes.
+
+---
+
+### Q: What is `ScriptOutput` and why use a dataclass?
+
+**Answer:** `ScriptOutput` is a Python `@dataclass` defined in `film/activities/script.py` (or a shared models file) with three fields: `scenes: int`, `total_tokens: int`, and `asset_id: str`. Temporal activities must return values that are serializable to JSON so Temporal can persist them in its event history — if the Worker crashes mid-workflow, Temporal replays the workflow from its history and injects the previously-returned value rather than re-running the completed activity. Python dataclasses serialize cleanly to JSON via Temporal's built-in `dataclasses.asdict()` serialization path. They also provide type-safe attribute access in the workflow code that receives the return value: `result.scenes`, `result.asset_id` — no dict key typos at runtime.
+
+**Follow-up: What would happen if you returned a SQLAlchemy model object instead?**
+
+SQLAlchemy ORM objects are not JSON-serializable by default. A `ScriptOutput` returned as an `Asset` ORM instance would cause Temporal's serializer to raise an exception when it tried to persist the activity result to its event history. Additionally, ORM objects hold a reference to the database session they were loaded from — after the session is closed (which happens at the end of the `async with AsyncSessionFactory()` block), accessing lazy-loaded relationships on the ORM object would raise a `DetachedInstanceError`. Returning a plain dataclass avoids both problems: it's a pure data structure with no session attachment and trivially serializable.
+
+---
+
+## 14. RAG — What We Built vs What We Used
+
+### Q: You mention RAG — what exactly did you implement and what's still pending?
+
+**Answer:** RAG has two distinct phases: indexing and retrieval. As of Phase 3, we have fully implemented the indexing phase but have not yet used retrieval. In Phase 2, the `research_topic` activity chunked the Groq research output into segments, ran each through `SentenceTransformer("all-MiniLM-L6-v2")` to produce a 384-dimensional embedding vector, and stored each chunk as a `ResearchChunk` row in PostgreSQL with its `embedding vector(384)` column populated. The IVFFlat index on that column is in place. In Phase 3, the `generate_script` activity fetches research with a plain SQL `SELECT` — it retrieves all chunks for the project indiscriminately, concatenates their text, and trims to 6000 characters. No vector similarity query is performed. Phase 4 (storyboarding) will be the first place actual RAG retrieval is used: for each scene, the storyboard activity will embed the scene's narration text and query `ORDER BY embedding <=> query_vector LIMIT K` to find the top-K most semantically relevant research chunks, which will then be passed as focused context to the image prompt generator.
+
+**Follow-up: Why didn't you use vector search in Phase 3?**
+
+Script generation benefits from broad context — you want the LLM to have a holistic view of all the research when writing the narrative arc across all scenes. Retrieving only the top-K similar chunks for a single query vector would lose chunks that are relevant to the second or third act but not the most similar to any single query. Since the total research for a typical project fits within 6000 characters after trimming, there was no practical need for selective retrieval. Phase 4 operates at the scene level — each scene has a specific narrative focus — which is exactly when selective retrieval pays off.
+
+**Follow-up: What's the difference between "storing embeddings" and "using RAG"?**
+
+Storing embeddings is the offline indexing step: you take your source documents, convert them to vector representations, and persist those vectors alongside the source text. This makes future retrieval possible but doesn't constitute RAG by itself. Using RAG means that at query time — when you're about to call an LLM — you first embed your query, perform a vector similarity search against the stored embeddings to find the most semantically relevant documents, and then inject those retrieved documents as context into the LLM prompt. The LLM's answer is thus "grounded" in the retrieved content rather than generated purely from its parametric memory. We have the index. The retrieval-augmented generation step comes in Phase 4.
+
+---
+
+### Q: Explain the full RAG flow you're building toward.
+
+**Answer:** The target RAG flow in Phase 4 works as follows. During indexing (already done in Phase 2): the research text is split into overlapping chunks of roughly 500 characters, each chunk is passed through `SentenceTransformer("all-MiniLM-L6-v2")` to produce a 384-dim float vector, and the vector is stored in the `research_chunks.embedding` column in PostgreSQL with the pgvector extension. An IVFFlat index with `lists=100` is built on that column. During retrieval (Phase 4): when the storyboard activity processes Scene N, it takes the scene's `NARRATION` text, embeds it with the same `SentenceTransformer` model to get a query vector, then issues a PostgreSQL query: `SELECT text FROM research_chunks WHERE project_id = :pid ORDER BY embedding <=> :qvec LIMIT 5`. The `<=>` operator is pgvector's cosine distance operator. The top-5 returned chunks are concatenated and injected into the image prompt as a `CONTEXT:` block. The LLM generating the visual description is therefore grounded in the specific research passages most relevant to that scene's narration.
+
+**Follow-up: Why is RAG better than just passing all research to the LLM?**
+
+Two reasons: context window limits and signal-to-noise ratio. LLMs have finite context windows — the full research corpus for a long documentary could easily exceed 50,000 tokens, which is impractical to include in every prompt. RAG lets you include only the 5–10 most relevant chunks, staying well within limits. Even within the context window, irrelevant text degrades output quality: studies show that LLMs have difficulty "finding the needle" when the relevant passage is buried in a long context. Retrieving only the semantically closest chunks means the model's attention is focused on what matters for the current generation task.
+
+**Follow-up: What is the IVFFlat index and why does it matter at scale?**
+
+IVFFlat stands for Inverted File Flat. It partitions the vector space into `lists` clusters (configured as 100 in our migration) using k-means during index build time. At query time, instead of comparing the query vector against every row in the table (exact nearest neighbor search, O(n)), the index identifies the closest cluster centroids first and only searches within those clusters. This reduces the search space dramatically — with `lists=100` and default `probes=10`, pgvector searches roughly 10% of the data. The trade-off is that it's approximate: a result in a neighboring cluster might be missed. For a production system with millions of chunks this speed improvement is essential. For our current scale (hundreds of chunks per project) it makes no measurable difference, but the index is cheap to maintain and the habit of indexing correctly from the start avoids a painful backfill migration later.
+
+---
+
+### Q: What embedding model are you using and why?
+
+**Answer:** We use `sentence-transformers/all-MiniLM-L6-v2`, which produces 384-dimensional embeddings. It was chosen for three reasons. First, it runs entirely on CPU — there's no GPU requirement, which keeps the Docker Compose stack runnable on a standard development laptop without a CUDA-enabled GPU. Second, it's fast: embedding a 500-character chunk takes under 10 milliseconds on CPU. Third, it achieves strong results on semantic similarity benchmarks despite its small size — it was specifically trained on a large collection of sentence pairs for semantic textual similarity tasks, which is exactly what we need for finding research chunks relevant to a given narration sentence. The model is downloaded once via the `sentence-transformers` library and cached locally; there are no API calls, no per-token costs, and no network latency on subsequent uses.
+
+**Follow-up: Why not use OpenAI's embedding API instead?**
+
+Three reasons: cost, latency, and availability. OpenAI's `text-embedding-3-small` model costs money per token and requires an API key with billing enabled. For a Phase 1 pipeline that might embed thousands of chunks during development and testing, those costs add up without delivering value over a local model. OpenAI embeddings also add network latency on every embed call — embedding a batch of 20 chunks requires a round-trip to OpenAI's servers. Most importantly, using a third-party embedding API introduces an external dependency that can be rate-limited, throttled, or unavailable, causing activity failures. Running `all-MiniLM-L6-v2` locally eliminates all three concerns.
+
+**Follow-up: What's the trade-off between 384 dimensions versus 1536 dimensions?**
+
+Higher-dimensional embeddings can capture more nuanced semantic distinctions — `text-embedding-3-large` uses 3072 dimensions and `text-embedding-ada-002` uses 1536. More dimensions generally means better retrieval precision, particularly for subtle topic distinctions. However, higher dimensions increase storage (1536 floats × 4 bytes = 6144 bytes per chunk vs. 384 × 4 = 1536 bytes), slow down cosine similarity computation, and make the IVFFlat index larger and slower to build. For documentary research chunks — which tend to be topically coherent and semantically distinct — 384 dimensions provides sufficient resolution to separate "Battle of Thermopylae tactics" from "Persian Empire trade routes." If retrieval precision became a bottleneck in production, upgrading to a higher-dimensional model would be a targeted optimization rather than an upfront requirement.
+
+**Follow-up: What does `normalize_embeddings=True` do?**
+
+When `normalize_embeddings=True` is passed to `model.encode()`, each returned vector is divided by its L2 norm, making it a unit vector with magnitude 1. This is important for cosine similarity: cosine similarity between two vectors is defined as their dot product divided by the product of their magnitudes. When both vectors are unit vectors, the dot product equals the cosine similarity directly. pgvector's `<=>` cosine distance operator (`1 - cosine_similarity`) produces correct results regardless of normalization, but normalizing at encode time means you could also use the inner product operator `<#>` (negative inner product) for retrieval, which is computationally cheaper. Normalized embeddings also ensure that the magnitude of the text (longer texts with more repeated terms would otherwise produce larger vectors) does not artificially inflate similarity scores.
+
+---
+
+## 15. API Design — Script Endpoint
+
+### Q: Why return the script content inside the API response instead of a separate file or URL?
+
+**Answer:** The script is plain UTF-8 text — typically 2,000–8,000 characters for a 10–30 minute documentary. Returning it inline in the JSON response is the simplest design that works: no pre-signed URL generation, no MinIO round-trip, no separate download step in the frontend. The `GET /api/v1/projects/{project_id}/script` endpoint in `film/api/v1/projects.py` fetches the `Asset` row with `type="script"`, reads `asset.meta["content"]`, and returns a JSON object with `project_id`, `asset_id`, `scenes`, `content`, and `created_at`. The frontend receives the full script in a single fetch and renders it in a scrollable `<pre>` block. This is appropriate for text payloads under ~100KB — which all realistic documentary scripts are.
+
+**Follow-up: At what point would you switch to returning a MinIO URL instead?**
+
+Once the generated assets become large binaries — storyboard images, audio narration files, video segments — returning them inline becomes impractical. The threshold is roughly when the payload exceeds what you'd comfortably embed in JSON (conventionally ~1MB). For those cases, the `Asset` table has a `storage_path` column designed to hold a MinIO object path. The API would instead return a pre-signed URL generated by the MinIO client: `minio_client.presigned_get_object("film-assets", asset.storage_path, expires=timedelta(hours=1))`. The frontend would then open that URL directly in a `<video>` or `<img>` tag, bypassing the API server entirely for the large payload transfer.
+
+**Follow-up: Why does the endpoint return 404 instead of 202 when the script isn't ready yet?**
+
+A 202 Accepted would be semantically correct if the resource is being generated and the client should retry. However, returning 202 requires the client to distinguish between "accepted, keep polling" and "not found, stop trying." In this design, the frontend already has that context from the project's `status` field — the script query is only enabled when `project.status === 'completed'`. If the project is completed but the `Asset` row with `type="script"` is missing, that is a genuine data integrity problem (the workflow failed to store the asset), not a transient "still generating" state. Returning 404 in that case clearly signals "this resource does not exist" so the developer can investigate rather than the client silently retrying indefinitely. Using the project status as the gate prevents the 404 from being a normal condition during happy-path operation.
+
+---
+
+### Q: How does the frontend know when to fetch the script?
+
+**Answer:** In `ProjectDetail.tsx`, the TanStack Query hook for the script is configured with `enabled: !!id && project?.status === 'completed'`. The `!!id` guard prevents firing before the project ID is known from the URL params. The `project?.status === 'completed'` guard means the script query is entirely suppressed — not just failing silently — while the project is in `pending`, `researching`, or `scripting` states. TanStack Query respects `enabled: false` by not scheduling the fetch at all, producing no network requests and no loading spinner for the script panel until the condition is met. Once the project transitions to `completed` (detected on the next 3-second polling tick of the project query), `enabled` becomes `true` and TanStack Query immediately fires the script fetch.
+
+**Follow-up: What's the risk of polling for the script before the project is completed?**
+
+If the script query were enabled during `scripting` status, it would repeatedly hit `GET /api/v1/projects/{id}/script` and receive 404 responses every 3 seconds. TanStack Query's default retry behavior would treat 404 as a retryable error and back off, but the net effect is unnecessary load on the database (each 404 requires a DB query to confirm the Asset row doesn't exist) and confusing error state in the UI. More subtly, if a flaky network caused the 404 to be returned after the script was actually stored, the query might cache the 404 and not refetch — leading to a "script ready on server, 404 cached on client" bug. Gating on `status === 'completed'` avoids all of this.
+
+**Follow-up: Why `retry: false` on the script query?**
+
+The script query uses `retry: false` because the only expected non-200 response is 404 (script not yet generated or genuinely missing), and retrying a 404 is pointless — the server state hasn't changed between retries. TanStack Query's default retry logic (3 retries with exponential backoff) is designed for transient network errors, not semantic "not found" responses. If the script genuinely doesn't exist because the workflow failed, retrying will just produce the same 404 three times and delay showing the error state to the user by several seconds. With `retry: false`, the first 404 immediately sets the query to error state, which the frontend can surface as a "script unavailable" message rather than a loading spinner that eventually times out.
+
+---
+
+*End of Phase 3 interview preparation. This document now covers Phases 1–3 of the AI Film Production Pipeline including system design, all backend services, the React frontend, and the script generation pipeline with RAG context.*
