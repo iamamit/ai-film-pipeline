@@ -9,6 +9,7 @@ with workflow.unsafe.imports_passed_through():
     from film.activities.research import ResearchInput, ResearchOutput, research_topic
     from film.activities.script import ScriptInput, ScriptOutput, generate_script
     from film.activities.storyboard import StoryboardInput, StoryboardOutput, generate_storyboard
+    from film.activities.assets import AssetsInput, AssetsOutput, generate_assets
     from film.activities.finalize import mark_completed
 
 
@@ -80,7 +81,22 @@ class FilmProductionWorkflow:
             f"storyboard_done scenes={storyboard_result.scenes_processed} tokens={storyboard_result.total_tokens}"
         )
 
-        # Phase 4+ (Asset Generation, Assembly) — added in future phases
+        # Phase 4: Asset Generation (60% → 80%)
+        assets_result: AssetsOutput = await workflow.execute_activity(
+            generate_assets,
+            AssetsInput(
+                project_id=inp.project_id,
+                topic=inp.topic,
+                tone=inp.tone,
+            ),
+            start_to_close_timeout=timedelta(minutes=15),
+            retry_policy=RETRY,
+        )
+        workflow.logger.info(
+            f"assets_done voiceovers={assets_result.voiceovers_generated} images={assets_result.images_generated}"
+        )
+
+        # Phase 5+ (Assembly) — added in next phase
         await workflow.execute_activity(
             mark_completed,
             inp.project_id,
