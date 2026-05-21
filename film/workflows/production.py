@@ -8,6 +8,7 @@ from temporalio.common import RetryPolicy
 with workflow.unsafe.imports_passed_through():
     from film.activities.research import ResearchInput, ResearchOutput, research_topic
     from film.activities.script import ScriptInput, ScriptOutput, generate_script
+    from film.activities.storyboard import StoryboardInput, StoryboardOutput, generate_storyboard
     from film.activities.finalize import mark_completed
 
 
@@ -64,7 +65,22 @@ class FilmProductionWorkflow:
             f"script_done scenes={script_result.scenes} tokens={script_result.total_tokens}"
         )
 
-        # Phase 3+ (Storyboarding, Assets, Assembly) — added in future phases
+        # Phase 3: Storyboarding (40% → 60%) — first use of RAG
+        storyboard_result: StoryboardOutput = await workflow.execute_activity(
+            generate_storyboard,
+            StoryboardInput(
+                project_id=inp.project_id,
+                topic=inp.topic,
+                tone=inp.tone,
+            ),
+            start_to_close_timeout=timedelta(minutes=10),
+            retry_policy=RETRY,
+        )
+        workflow.logger.info(
+            f"storyboard_done scenes={storyboard_result.scenes_processed} tokens={storyboard_result.total_tokens}"
+        )
+
+        # Phase 4+ (Asset Generation, Assembly) — added in future phases
         await workflow.execute_activity(
             mark_completed,
             inp.project_id,

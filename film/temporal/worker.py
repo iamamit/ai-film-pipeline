@@ -7,6 +7,7 @@ from temporalio.worker import Worker
 from film.activities.finalize import mark_completed
 from film.activities.research import research_topic
 from film.activities.script import generate_script
+from film.activities.storyboard import generate_storyboard
 from film.core.config import get_settings
 from film.core.logging import setup_logging
 from film.temporal.client import get_temporal_client
@@ -24,7 +25,7 @@ async def run_worker() -> None:
         client,
         task_queue=settings.temporal_task_queue,
         workflows=[FilmProductionWorkflow],
-        activities=[research_topic, generate_script, mark_completed],
+        activities=[research_topic, generate_script, generate_storyboard, mark_completed],
     )
     logger.info("temporal_worker_started", task_queue=settings.temporal_task_queue)
     await worker.run()

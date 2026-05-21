@@ -167,3 +167,37 @@ async def get_script(
         "content": asset.meta.get("content") if asset.meta else None,
         "created_at": asset.created_at.isoformat(),
     }
+
+
+@router.get("/{project_id}/storyboard", tags=["projects"])
+async def get_storyboard(
+    project_id: uuid.UUID,
+    user_id: CurrentUser,
+    db: DbSession,
+) -> dict:
+    project = (
+        await db.execute(
+            select(Project).where(Project.id == project_id, Project.user_id == user_id)
+        )
+    ).scalar_one_or_none()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    asset = (
+        await db.execute(
+            select(Asset)
+            .where(Asset.project_id == project_id, Asset.type == "storyboard")
+            .order_by(Asset.created_at.desc())
+        )
+    ).scalars().first()
+
+    if not asset:
+        raise HTTPException(status_code=404, detail="Storyboard not yet generated")
+
+    return {
+        "project_id": str(project_id),
+        "asset_id": str(asset.id),
+        "total_scenes": asset.meta.get("total_scenes") if asset.meta else None,
+        "scenes": asset.meta.get("scenes") if asset.meta else [],
+        "created_at": asset.created_at.isoformat(),
+    }

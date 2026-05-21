@@ -1,6 +1,6 @@
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Film, Clock, DollarSign, Calendar, XCircle, Loader2, CheckCircle2, Circle, AlertCircle, ScrollText } from 'lucide-react'
+import { ArrowLeft, Film, Clock, DollarSign, Calendar, XCircle, Loader2, CheckCircle2, Circle, AlertCircle, ScrollText, Clapperboard } from 'lucide-react'
 import { clsx } from 'clsx'
 import { api } from '../api/client'
 import { StatusBadge } from '../components/StatusBadge'
@@ -47,6 +47,13 @@ export function ProjectDetail() {
   const { data: script } = useQuery({
     queryKey: ['script', id],
     queryFn: () => api.projects.script(id!),
+    enabled: !!id && project?.status === 'completed',
+    retry: false,
+  })
+
+  const { data: storyboard } = useQuery({
+    queryKey: ['storyboard', id],
+    queryFn: () => api.projects.storyboard(id!),
     enabled: !!id && project?.status === 'completed',
     retry: false,
   })
@@ -201,6 +208,38 @@ export function ProjectDetail() {
             <pre className="text-xs text-slate-300 whitespace-pre-wrap leading-relaxed bg-slate-950 rounded-lg p-4 overflow-auto max-h-[600px]">
               {script.content}
             </pre>
+          </div>
+        )}
+
+        {/* storyboard */}
+        {storyboard && storyboard.scenes.length > 0 && (
+          <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Clapperboard className="h-4 w-4 text-violet-400" />
+                <h2 className="text-sm font-semibold text-slate-300">Storyboard</h2>
+              </div>
+              <span className="text-xs text-slate-500">{storyboard.total_scenes} scenes</span>
+            </div>
+            <div className="space-y-4">
+              {storyboard.scenes.map(scene => (
+                <details key={scene.scene_number} className="group rounded-lg border border-slate-700 bg-slate-800/50">
+                  <summary className="flex items-center justify-between px-4 py-3 cursor-pointer list-none">
+                    <span className="text-sm font-medium text-slate-200">Scene {scene.scene_number}</span>
+                    <span className="text-xs text-slate-500 group-open:hidden">Expand</span>
+                    <span className="text-xs text-slate-500 hidden group-open:inline">Collapse</span>
+                  </summary>
+                  <div className="px-4 pb-4 space-y-3">
+                    <p className="text-xs text-slate-400 italic border-l-2 border-slate-600 pl-3">
+                      {scene.scene_text.slice(0, 200)}...
+                    </p>
+                    <pre className="text-xs text-slate-300 whitespace-pre-wrap leading-relaxed bg-slate-950 rounded-lg p-3">
+                      {scene.storyboard}
+                    </pre>
+                  </div>
+                </details>
+              ))}
+            </div>
           </div>
         )}
 

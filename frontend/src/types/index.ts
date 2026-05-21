@@ -58,6 +58,20 @@ export interface ScriptResponse {
   created_at: string
 }
 
+export interface StoryboardScene {
+  scene_number: number
+  scene_text: string
+  storyboard: string
+}
+
+export interface StoryboardResponse {
+  project_id: string
+  asset_id: string
+  total_scenes: number | null
+  scenes: StoryboardScene[]
+  created_at: string
+}
+
 export interface PhaseStep {
   key: string
   label: string
