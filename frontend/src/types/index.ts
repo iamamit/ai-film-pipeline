@@ -50,6 +50,14 @@ export interface ReadyResponse {
   checks: Record<string, string>
 }
 
+export interface ScriptResponse {
+  project_id: string
+  asset_id: string
+  scenes: number | null
+  content: string | null
+  created_at: string
+}
+
 export interface PhaseStep {
   key: string
   label: string

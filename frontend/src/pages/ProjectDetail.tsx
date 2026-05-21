@@ -1,6 +1,6 @@
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Film, Clock, DollarSign, Calendar, XCircle, Loader2, CheckCircle2, Circle, AlertCircle } from 'lucide-react'
+import { ArrowLeft, Film, Clock, DollarSign, Calendar, XCircle, Loader2, CheckCircle2, Circle, AlertCircle, ScrollText } from 'lucide-react'
 import { clsx } from 'clsx'
 import { api } from '../api/client'
 import { StatusBadge } from '../components/StatusBadge'
@@ -42,6 +42,13 @@ export function ProjectDetail() {
       qc.invalidateQueries({ queryKey: ['projects'] })
       qc.invalidateQueries({ queryKey: ['project', id] })
     },
+  })
+
+  const { data: script } = useQuery({
+    queryKey: ['script', id],
+    queryFn: () => api.projects.script(id!),
+    enabled: !!id && project?.status === 'completed',
+    retry: false,
   })
 
   if (isLoading) {
@@ -180,6 +187,22 @@ export function ProjectDetail() {
             })}
           </div>
         </div>
+
+        {/* script */}
+        {script && (
+          <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <ScrollText className="h-4 w-4 text-indigo-400" />
+                <h2 className="text-sm font-semibold text-slate-300">Generated Script</h2>
+              </div>
+              <span className="text-xs text-slate-500">{script.scenes} scenes</span>
+            </div>
+            <pre className="text-xs text-slate-300 whitespace-pre-wrap leading-relaxed bg-slate-950 rounded-lg p-4 overflow-auto max-h-[600px]">
+              {script.content}
+            </pre>
+          </div>
+        )}
 
         {/* raw data */}
         <details className="rounded-2xl border border-slate-800 bg-slate-900 p-6 group">

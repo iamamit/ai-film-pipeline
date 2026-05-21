@@ -1,4 +1,4 @@
-import type { CreateProjectPayload, HealthResponse, Project, ProjectListResponse, ReadyResponse } from '../types'
+import type { CreateProjectPayload, HealthResponse, Project, ProjectListResponse, ReadyResponse, ScriptResponse } from '../types'
 
 // Hardcoded for Phase 1 — replaced with real auth in a later phase
 const USER_ID = '550e8400-e29b-41d4-a716-446655440000'
@@ -40,5 +40,8 @@ export const api = {
 
     cancel: (id: string) =>
       request<Project>(`${BASE}/projects/${id}`, { method: 'DELETE' }),
+
+    script: (id: string) =>
+      request<ScriptResponse>(`${BASE}/projects/${id}/script`),
   },
 }

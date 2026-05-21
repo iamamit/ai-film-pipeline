@@ -7,6 +7,7 @@ from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
     from film.activities.research import ResearchInput, ResearchOutput, research_topic
+    from film.activities.script import ScriptInput, ScriptOutput, generate_script
     from film.activities.finalize import mark_completed
 
 
@@ -47,7 +48,23 @@ class FilmProductionWorkflow:
             f"research_done chunks={research_result.chunks_stored} tokens={research_result.total_tokens}"
         )
 
-        # Mark completed — Phase 3+ will add scripting, storyboarding, assets here
+        # Phase 2: Script Generation (20% → 40%)
+        script_result: ScriptOutput = await workflow.execute_activity(
+            generate_script,
+            ScriptInput(
+                project_id=inp.project_id,
+                topic=inp.topic,
+                duration_minutes=inp.duration_minutes,
+                tone=inp.tone,
+            ),
+            start_to_close_timeout=timedelta(minutes=5),
+            retry_policy=RETRY,
+        )
+        workflow.logger.info(
+            f"script_done scenes={script_result.scenes} tokens={script_result.total_tokens}"
+        )
+
+        # Phase 3+ (Storyboarding, Assets, Assembly) — added in future phases
         await workflow.execute_activity(
             mark_completed,
             inp.project_id,

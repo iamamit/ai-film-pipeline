@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import func, select
 
 from film.api.deps import CurrentUser, DbSession
-from film.db.models import Project
+from film.db.models import Asset, Project
 from film.schemas.project import ProjectCreate, ProjectListResponse, ProjectResponse
 from film.temporal.client import get_temporal_client
 from film.workflows.production import FilmProductionWorkflow, ProductionInput
@@ -132,3 +132,38 @@ async def cancel_project(
 
     logger.info("project_cancelled", project_id=str(project_id))
     return row
+
+
+@router.get("/{project_id}/script", tags=["projects"])
+async def get_script(
+    project_id: uuid.UUID,
+    user_id: CurrentUser,
+    db: DbSession,
+) -> dict:
+    # Verify project ownership
+    project = (
+        await db.execute(
+            select(Project).where(Project.id == project_id, Project.user_id == user_id)
+        )
+    ).scalar_one_or_none()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    asset = (
+        await db.execute(
+            select(Asset)
+            .where(Asset.project_id == project_id, Asset.type == "script")
+            .order_by(Asset.created_at.desc())
+        )
+    ).scalars().first()
+
+    if not asset:
+        raise HTTPException(status_code=404, detail="Script not yet generated")
+
+    return {
+        "project_id": str(project_id),
+        "asset_id": str(asset.id),
+        "scenes": asset.meta.get("scenes") if asset.meta else None,
+        "content": asset.meta.get("content") if asset.meta else None,
+        "created_at": asset.created_at.isoformat(),
+    }
